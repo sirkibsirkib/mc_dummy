@@ -1,0 +1,9 @@
+[package]
+name = "mc_dummy"
+version = "0.1.0"
+authors = ["sirkibsirkib <christopher.esterhuyse@gmail.com>"]
+
+[dependencies]
+clap = "2.31"
+byteorder = "1.2.3"
+hex = "0.3.2"
