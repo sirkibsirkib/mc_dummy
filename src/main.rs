@@ -28,24 +28,36 @@ fn main() {
             .version("1.0")
             .author("C. Esterhuyse <christopher.esterhuyse@gmail.com>")
             .about("Connects a Dummy Client to an offline-mode Minecraft server which will wander around.")
-            .args_from_usage("<ip> 'sets the server addr. Eg 127.0.0.1:25565'")
-            .get_matches();
+            .args_from_usage("
+                <ip> 'sets the server addr. Eg 127.0.0.1'
+                <port> 'sets the server addr. Eg 25565'
+                ").get_matches();
     let ip = matches.value_of("ip").unwrap();
-    if let Ok(addr) = ip.parse::<SocketAddr>() {
-        go(addr);
+    let port = matches.value_of("port").unwrap();
+    if let Ok(addr) = (&format!("{}:{}", ip, port)).parse::<SocketAddr>() {
+        go(addr, ip, port.parse().expect("bad port num"));
     } else {
-        println!(">> Couldn't parse ip string `{}`. Good example: `127.0.0.1:8000`", ip);
+        println!(">> Couldn't parse ip string!");
     }
 }
 
 
-fn go(addr: SocketAddr) {
-    let mut stream = TcpStream::connect("127.0.0.1:25565").unwrap();
+fn go(addr: SocketAddr, ip: &str, port: u16) {
+    println!("Connecting to ip={}, port={}", ip, port);
+    let mut stream = {
+        match TcpStream::connect(&format!("{}:{}", ip, port)) {
+            Ok(stream) => stream,
+            Err(e) => {
+                println!("Failed to connect. Error {:#?}", e);
+                return;
+            },
+        }
+    };
     println!("Did the thing");
 
     let playername = "BobbyG";
 
-    Packet::new_handshake(340, "127.0.0.1", 25565, HandshakeState::Login)
+    Packet::new_handshake(340, ip, 25565, HandshakeState::Login)
     .write_to(&mut stream);
 
     Packet::new_loginstart(playername)
@@ -93,24 +105,20 @@ fn go(addr: SocketAddr) {
         };
 
         println!("len {}. code {}", len, code);
-        use code_header_play::*;
+        use code_header_play as code;
         match code {
-            SET_COMPRESSION => {
+            code::SET_COMPRESSION => {
                 let thresh = payload.read_varint();
                 println!("THRESH = {}", thresh);
                 compression_thresh = Some(thresh as u32);
             },
-            JOIN_GAME       |
-            LOGIN_SUCCESS   |
-            PLUGIN_MSG      | 
-            SET_SLOT        |
-            CLOSE_WINDOW    |
-            WINDOW_ITEMS    |
-            PLAYER_ABILTIES => {
-                println!("idgaf.");
-            },
             x => {
-                println!("unknown code {} (hex {})", x, hex::encode(&[x;1]));
+                if code_is_known(x) {
+                    println!("ignored code {} (hex {})", x, hex::encode(&[x;1]));
+                } else {
+                    println!("unknown code {} (hex {})", x, hex::encode(&[x;1]));
+                }
+                
             }
         };
         let mut remainder = vec![];
@@ -122,3 +130,33 @@ fn go(addr: SocketAddr) {
 
 
 impl<T: Read> ReadPlusPlus for T {}
+
+
+fn code_is_known(x: u8) -> bool {
+    use code_header_play as code;
+    match x {
+        code::PLAYER_POSITION_AND_LOOK    |
+        code::CHANGE_GAME_STATE           |
+        code::DISPLAY_SCOREBOARD          |
+        code::ENTITY_PROPERTIES           |
+        code::JOIN_GAME       |
+        code::LOGIN_SUCCESS   |
+        code::PLUGIN_MSG      | 
+        code::SET_SLOT        |
+        code::CLOSE_WINDOW    |
+        code::WINDOW_ITEMS    |
+        code::ENTITY_VELOCITY |
+        code::SET_EXPERIENCE  |
+        code::UPDATE_HEALTH   |
+        code::WORLD_BORDER    |
+        code::TIME_UPDATE     |
+        code::SPAWN_POSITION  |
+        code::UNLOCK_RECIPES  |
+        code::PLAYER_LOOK     |
+        code::PLAYER_LIST_ITEM|
+        code::ADVANCEMENTS    |
+        code::ENTITY_METADATA |
+        code::PLAYER_ABILTIES => true,
+        _ => false,
+    }
+}

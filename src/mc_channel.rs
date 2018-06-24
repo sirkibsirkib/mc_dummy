@@ -122,8 +122,8 @@ pub trait WritePlusPlus: Write {
 
     fn write_preamble(&mut self, preamble: Preamble) {
     	let byte: u8 = match preamble {
-			Handshake => 0x00,
-			LoginStart => 0x00,
+			Preamble::Handshake => 0x00,
+			Preamble::LoginStart => 0x00,
 		};
 		self.write(& [byte; 1]);
     }
