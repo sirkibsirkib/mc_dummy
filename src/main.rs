@@ -15,12 +15,17 @@ use clap::App;
 
 mod mc_channel;
 mod code_header_play;
+mod game_stuff;
 
 use mc_channel::{
     Packet, HandshakeState,
     ReadPlusPlus,
     WritePlusPlus,
+    ChatMode,
+    MainHand,
 };
+
+use game_stuff::Position;
 
 
 fn main() {
@@ -31,105 +36,132 @@ fn main() {
             .args_from_usage("
                 <ip> 'sets the server addr. Eg 127.0.0.1'
                 <port> 'sets the server addr. Eg 25565'
+                <playername> 'selects the name of the client for the game'
                 ").get_matches();
     let ip = matches.value_of("ip").unwrap();
     let port = matches.value_of("port").unwrap();
+    let playername = matches.value_of("playername").unwrap();
     if let Ok(addr) = (&format!("{}:{}", ip, port)).parse::<SocketAddr>() {
-        go(addr, ip, port.parse().expect("bad port num"));
+        let mut p = Player::new(addr, playername.to_owned(), ip.to_owned(), port.parse().unwrap());
+        p.go();
+
     } else {
         println!(">> Couldn't parse ip string!");
     }
 }
 
-
-fn go(addr: SocketAddr, ip: &str, port: u16) {
-    println!("Connecting to ip={}, port={}", ip, port);
-    let mut stream = {
-        match TcpStream::connect(&format!("{}:{}", ip, port)) {
-            Ok(stream) => stream,
-            Err(e) => {
-                println!("Failed to connect. Error {:#?}", e);
-                return;
-            },
-        }
-    };
-    println!("Did the thing");
-
-    let playername = "BobbyG";
-
-    Packet::new_handshake(340, ip, 25565, HandshakeState::Login)
-    .write_to(&mut stream);
-
-    Packet::new_loginstart(playername)
-    .write_to(&mut stream);
-
-    let sleeptime = time::Duration::from_millis(300);
-
-    let mut buf: Vec<u8> = vec![];
-    while buf.len() < 64 {
-        buf.push(0);
-    }
-
-    let mut compression_thresh = None;
-
-    loop {
-        let len = stream.read_varint() as usize;
-        while len > buf.len() {
-            buf.push(0u8);
-        }
-        stream.read_exact(&mut buf[0..len]);
-
-        /*
-        We wrap the payload buffer into a reader.
-        its now impossible to read out of bounds and calls to payload
-        will advance the state of the reader (`payload`) as expected
-        */
-        let mut payload = BufReader::new(&buf[0..len]);
-
-        let code: u8 = match compression_thresh {
-            None => {
-                let x = payload.read_varint();
-                assert!(0 <= x && x <= 256);
-                x as u8
-            },
-            Some(k) => {
-                let compress_code = payload.read_varint();
-                println!("compress_code {}", compress_code);
-                if compress_code != 0 {
-                    continue;
-                }
-                let x = payload.read_varint();
-                assert!(0 <= x && x <= 256);
-                x as u8
-            }   
-        };
-
-        println!("len {}. code {}", len, code);
-        use code_header_play as code;
-        match code {
-            code::SET_COMPRESSION => {
-                let thresh = payload.read_varint();
-                println!("THRESH = {}", thresh);
-                compression_thresh = Some(thresh as u32);
-            },
-            x => {
-                if code_is_known(x) {
-                    println!("ignored code {} (hex {})", x, hex::encode(&[x;1]));
-                } else {
-                    println!("unknown code {} (hex {})", x, hex::encode(&[x;1]));
-                }
-                
-            }
-        };
-        let mut remainder = vec![];
-        let p = payload.read_to_end(&mut remainder).unwrap();
-        println!("remainder {}", hex::encode(&remainder[0..p]));
-    }
+struct Player {
+    stream: TcpStream,
+    buf: Vec<u8>,
+    name: String,
+    ip: String,
+    port: u16,
+    compression_thresh: Option<i32>,
+    pos: Option<Position>,
 }
 
+impl Player {
+    fn new(addr: SocketAddr, name: String, ip: String, port: u16)  -> Self {
+        println!(
+            "Welcome, `{}`. Connecting to ip={}, port={}...",
+            &name, &ip, &port,
+        );
+        let mut stream = {
+            match TcpStream::connect(&addr) {
+                Ok(stream) => stream,
+                Err(e) => {
+                    println!("Failed to connect. Error {:#?}", e);
+                    panic!("AHH");
+                },
+            }
+        };
+        println!("Successfully connected!");
+        Player {
+            stream,
+            ip,
+            port,
+            name,
+            buf: vec![],
+            compression_thresh: None,
+            pos: None,
+        }
+    }
+
+    fn handshake(&mut self) {
+        Packet::new_handshake(340, &self.ip, self.port, HandshakeState::Login)
+        .write_to(&mut self.stream, self.compression_thresh);
+
+        Packet::new_loginstart(&self.name)
+        .write_to(&mut self.stream, self.compression_thresh)
+    }
+
+    fn go(&mut self) {
+        self.handshake();
+        loop {
+            let len = self.stream.read_varint() as usize;
+            while len > self.buf.len() { &self.buf.push(0u8); }
+            self.stream.read_exact(&mut self.buf[0..len]);
+            let mut payload = BufReader::new(&self.buf[0..len]);
 
 
-impl<T: Read> ReadPlusPlus for T {}
+            let code: u8 = match self.compression_thresh {
+                None => {
+                    let x = payload.read_varint();
+                    assert!(0 <= x && x <= 256);
+                    x as u8
+                },
+                Some(k) => {
+                    let uncompressed_len = payload.read_varint();
+                    println!("uncompressed_len {}", uncompressed_len);
+                    if uncompressed_len != 0 {
+                        println!("zlib decompression not in yet!");
+                        continue;
+                    }
+                    let x = payload.read_varint();
+                    assert!(0 <= x && x <= 256);
+                    x as u8
+                }   
+            };
+            println!("len {}. code {}", len, code);
+            use code_header_play as code;
+            match code {
+                code::SET_COMPRESSION => {
+                    let thresh = payload.read_varint();
+                    println!("THRESH = {}", thresh);
+                    self.compression_thresh = Some(thresh);
+                    
+                },
+                code::JOIN_GAME => {
+                    Packet::new_teleport_confirm(0)
+                    .write_to(&mut self.stream, self.compression_thresh);
+                    Packet::new_client_settings("en_us", 2, ChatMode::Enabled, true, 127u8, MainHand::Right)
+                    .write_to(&mut self.stream, self.compression_thresh);
+                }
+                code::SPAWN_POSITION => {
+                    let pos = payload.read_position();
+                    println!("POS {:#?}", &pos);
+                    // Packet::new_player_position(pos.x as f64, pos.y as f64, pos.z as f64, false)
+                    // .write_to(&mut self.stream, self.compression_thresh);
+                    if self.pos.is_none() {
+                        self.pos = Some(pos);
+                    }
+                }
+                x => {
+                    if code_is_known(x) {
+                        println!("ignored code {} (hex {})", x, hex::encode(&[x;1]));
+                    } else {
+                        println!("unknown code {} (hex {})", x, hex::encode(&[x;1]));
+                    }
+                    
+                }
+            };
+            let mut remainder = vec![];
+            let p = payload.read_to_end(&mut remainder).unwrap();
+            println!("remainder {}", hex::encode(&remainder[0..p]));
+        }
+    }
+
+}
 
 
 fn code_is_known(x: u8) -> bool {
