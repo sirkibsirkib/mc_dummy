@@ -60,6 +60,7 @@ struct Player {
     pos: Option<Position>,
 }
 
+
 impl Player {
     fn new(addr: SocketAddr, name: String, ip: String, port: u16)  -> Self {
         println!(
@@ -132,16 +133,21 @@ impl Player {
                     
                 },
                 code::JOIN_GAME => {
-                    Packet::new_teleport_confirm(0)
-                    .write_to(&mut self.stream, self.compression_thresh);
                     Packet::new_client_settings("en_us", 2, ChatMode::Enabled, true, 127u8, MainHand::Right)
+                    .write_to(&mut self.stream, self.compression_thresh);
+                    Packet::new_plugin_message("MC|Brand", &vec![7, 118, 97, 110, 105, 108, 108, 97])
+                    .write_to(&mut self.stream, self.compression_thresh);
+                    Packet::new_teleport_confirm(0)
                     .write_to(&mut self.stream, self.compression_thresh);
                 }
                 code::SPAWN_POSITION => {
                     let pos = payload.read_position();
                     println!("POS {:#?}", &pos);
-                    // Packet::new_player_position(pos.x as f64, pos.y as f64, pos.z as f64, false)
-                    // .write_to(&mut self.stream, self.compression_thresh);
+
+
+                    Packet::new_player_position(pos.x as f64, pos.y as f64, pos.z as f64, false)
+                    .write_to(&mut self.stream, self.compression_thresh);
+
                     if self.pos.is_none() {
                         self.pos = Some(pos);
                     }

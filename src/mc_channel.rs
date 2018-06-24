@@ -37,6 +37,7 @@ pub enum HandshakeState {
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum Preamble {
 	Handshake, LoginStart, PlayerPosition, ClientSettings, TeleportConfirm,
+	PluginMessage,
 }
 
 pub struct Packet {
@@ -55,6 +56,7 @@ impl Packet {
 	pub fn new_handshake(version: i32, addr: &str,
 						 port: u16, state: HandshakeState) -> Self
 	{
+		//WORKS
 		let mut packet = Self::new_raw();
 		packet.write_preamble(Preamble::Handshake);
 		packet.write_varint(version);
@@ -65,6 +67,7 @@ impl Packet {
 	}
 
 	pub fn new_loginstart(name: &str) -> Self {
+		//WORKS
 		let mut packet = Self::new_raw();
 		packet.write_preamble(Preamble::LoginStart);
 		packet.write_string(name);
@@ -73,6 +76,7 @@ impl Packet {
 
 	pub fn new_player_position(x:f64, feet_y:f64, z:f64, on_ground:bool) -> Self {
 		let mut packet = Self::new_raw();
+		println!("YEEEE");
 		packet.write_preamble(Preamble::PlayerPosition);
 		packet.write_doubz(x);
 		packet.write_doubz(feet_y);
@@ -82,6 +86,7 @@ impl Packet {
 	}
 
 	pub fn new_client_settings(locale:&str, view_distance:i8, chat_mode:ChatMode, chat_colors:bool, skin_flags:u8, main_hand:MainHand) -> Self {
+		//WORKS
 		let mut packet = Self::new_raw();
 		packet.write_preamble(Preamble::ClientSettings);
 		packet.write_string(locale);
@@ -98,6 +103,15 @@ impl Packet {
 		let mut packet = Self::new_raw();
 		packet.write_preamble(Preamble::TeleportConfirm);
 		packet.write_varint(id);
+		packet
+	}
+
+	pub fn new_plugin_message(plugin_str:&str, data:&[u8]) -> Self {
+		//works
+		let mut packet = Self::new_raw();
+		packet.write_preamble(Preamble::PluginMessage);
+		packet.write_string(plugin_str);
+		packet.write(data);
 		packet
 	}
 
@@ -175,6 +189,7 @@ pub trait WritePlusPlus: Write {
 			Preamble::PlayerPosition => 0x0D,
 			Preamble::ClientSettings => 0x04,
 			Preamble::TeleportConfirm => 0x00,
+			Preamble::PluginMessage => 0x09,
 		};
 		self.write(& [byte; 1]);
     }
@@ -184,7 +199,7 @@ pub trait WritePlusPlus: Write {
     		((position.x & 0x3FFFFFF) << 38)
     		| ((position.y & 0xFFF) << 26)
     		| (position.z & 0x3FFFFFF);
-    	self.write_u64::<BigEndian>(unsafe {  mem::transmute(val)  });
+    	self.write_u64::<LittleEndian>(unsafe {  mem::transmute(val)  });
     }
 
     fn write_doubz(&mut self, x:f64) {
