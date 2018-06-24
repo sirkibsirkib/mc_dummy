@@ -151,6 +151,21 @@ impl Player {
                     if self.pos.is_none() {
                         self.pos = Some(pos);
                     }
+
+                    let longsleep = time::Duration::from_millis(3000);
+                    let shortsleep = time::Duration::from_millis(100);
+                    let mut p = self.pos.clone().unwrap();
+                    let mut x = p.x as f64;
+
+                    loop {
+                        thread::sleep(longsleep);
+                        for _ in 0..30 {
+                            thread::sleep(shortsleep);
+                            x += 0.1;
+                            Packet::new_player_position(x, p.y as f64, p.z as f64, false)
+                            .write_to(&mut self.stream, self.compression_thresh);
+                        }
+                    }
                 }
                 x => {
                     if code_is_known(x) {
