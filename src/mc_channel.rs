@@ -203,7 +203,7 @@ pub trait WritePlusPlus: Write {
     }
 
     fn write_doubz(&mut self, x:f64) {
-    	write!(self, "{}", x);
+    	self.write_f64::<BigEndian>(x);
     }
 
     fn write_boolz(&mut self, x:bool) {
