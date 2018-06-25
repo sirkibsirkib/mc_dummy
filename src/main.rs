@@ -170,6 +170,8 @@ impl Player {
                     let shortsleep = time::Duration::from_millis(90);
 
                     let mut t = self.player_state.clone().unwrap();
+                    Packet::new_player_position_look(t.x, t.y, t.z, t.yaw, t.pitch, true)
+                    .write_to(&mut self.stream, self.compression_thresh);
 
                     loop {
                         thread::sleep(shortsleep);
