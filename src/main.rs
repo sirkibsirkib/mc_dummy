@@ -7,8 +7,8 @@ extern crate hex;
 use std::net::TcpStream;
 use std::thread;
 use std::net::SocketAddr;
-use std::io::{Read, Write};
-use std::fmt;
+use std::io::{Read}; //Write
+// use std::fmt;
 use std::time;
 use std::io::BufReader;
 use clap::App;
@@ -25,7 +25,10 @@ use mc_channel::{
     MainHand,
 };
 
-use game_stuff::Position;
+use game_stuff::{
+    Position,
+    PlayerState,
+};
 
 
 fn main() {
@@ -52,13 +55,14 @@ fn main() {
 
 struct Player {
     stream: TcpStream,
-    buf: Vec<u8>,
     name: String,
     ip: String,
     port: u16,
     compression_thresh: Option<i32>,
-    pos: Option<Position>,
+    player_state: Option<PlayerState>,
 }
+
+type PayloadReader<'a> = BufReader<&'a [u8]>;
 
 
 impl Player {
@@ -67,7 +71,7 @@ impl Player {
             "Welcome, `{}`. Connecting to ip={}, port={}...",
             &name, &ip, &port,
         );
-        let mut stream = {
+        let stream = {
             match TcpStream::connect(&addr) {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -82,9 +86,8 @@ impl Player {
             ip,
             port,
             name,
-            buf: vec![],
             compression_thresh: None,
-            pos: None,
+            player_state: None,
         }
     }
 
@@ -96,14 +99,22 @@ impl Player {
         .write_to(&mut self.stream, self.compression_thresh)
     }
 
+    fn move_rel(&mut self, x: f64, y: f64, z: f64) {
+        if let Some(ref mut state) = self.player_state {
+            state.x += x;
+            state.y += y;
+            state.z += z;
+        }
+    }
+
     fn go(&mut self) {
         self.handshake();
+        let mut buf = vec![]; 
         loop {
             let len = self.stream.read_varint() as usize;
-            while len > self.buf.len() { &self.buf.push(0u8); }
-            self.stream.read_exact(&mut self.buf[0..len]);
-            let mut payload = BufReader::new(&self.buf[0..len]);
-
+            while len > buf.len() { &buf.push(0u8); }
+            self.stream.read_exact(&mut buf[0..len]).unwrap();
+            let mut payload = BufReader::new(&buf[0..len]);
 
             let code: u8 = match self.compression_thresh {
                 None => {
@@ -111,7 +122,7 @@ impl Player {
                     assert!(0 <= x && x <= 256);
                     x as u8
                 },
-                Some(k) => {
+                Some(_k) => {
                     let uncompressed_len = payload.read_varint();
                     println!("uncompressed_len {}", uncompressed_len);
                     if uncompressed_len != 0 {
@@ -133,40 +144,54 @@ impl Player {
                     
                 },
                 code::JOIN_GAME => {
-                    Packet::new_client_settings("en_us", 2, ChatMode::Enabled, true, 127u8, MainHand::Right)
+                    Packet::new_client_settings("en_us", 12, ChatMode::Enabled, true, 127u8, MainHand::Right)
                     .write_to(&mut self.stream, self.compression_thresh);
                     Packet::new_plugin_message("MC|Brand", &vec![7, 118, 97, 110, 105, 108, 108, 97])
                     .write_to(&mut self.stream, self.compression_thresh);
-                    Packet::new_teleport_confirm(0)
+                },
+                code::PLAYER_POSITION_AND_LOOK => {
+                    let x = payload.read_doubz();
+                    let y = payload.read_doubz();
+                    let z = payload.read_doubz();
+                    let yaw = payload.read_floatz();
+                    let pitch = payload.read_floatz();
+                    let flags = payload.read_bytez();
+                    let teleport_id = payload.read_varint();
+                    println!("got pos_look {:#?}", (x,y,z,yaw,pitch,flags,teleport_id));
+                    Packet::new_teleport_confirm(teleport_id)
                     .write_to(&mut self.stream, self.compression_thresh);
-                }
-                code::SPAWN_POSITION => {
-                    let pos = payload.read_position();
-                    println!("POS {:#?}", &pos);
 
+                    self.player_state = Some(PlayerState{
+                        x, y, z, yaw, pitch,
+                        on_ground: false,
+                    });
 
-                    Packet::new_player_position(pos.x as f64, pos.y as f64, pos.z as f64, false)
-                    .write_to(&mut self.stream, self.compression_thresh);
+                    let longsleep = time::Duration::from_millis(2000);
+                    let shortsleep = time::Duration::from_millis(90);
 
-                    if self.pos.is_none() {
-                        self.pos = Some(pos);
-                    }
-
-                    let longsleep = time::Duration::from_millis(3000);
-                    let shortsleep = time::Duration::from_millis(100);
-                    let mut p = self.pos.clone().unwrap();
-                    let mut x = p.x as f64;
+                    let mut t = self.player_state.clone().unwrap();
 
                     loop {
-                        thread::sleep(longsleep);
-                        for _ in 0..30 {
-                            thread::sleep(shortsleep);
-                            x += 0.1;
-                            Packet::new_player_position(x, p.y as f64, p.z as f64, false)
+                        thread::sleep(shortsleep);
+                        t.y -= 0.18;
+                        if t.y < 4.0 {
+                            t.y = 4.0;
+                            Packet::new_player_position(t.x, t.y, t.z, true)
+                            .write_to(&mut self.stream, self.compression_thresh);
+                            break;
+                        } else {
+                            Packet::new_player_position(t.x, t.y, t.z, false)
                             .write_to(&mut self.stream, self.compression_thresh);
                         }
                     }
-                }
+                    thread::sleep(longsleep);
+                    for _ in 0..20 {
+                        thread::sleep(shortsleep);
+                        t.x -= 0.18;
+                        Packet::new_player_position_look(t.x, t.y, t.z, t.yaw, t.pitch, true)
+                        .write_to(&mut self.stream, self.compression_thresh);
+                    }
+                },
                 x => {
                     if code_is_known(x) {
                         println!("ignored code {} (hex {})", x, hex::encode(&[x;1]));
@@ -174,7 +199,7 @@ impl Player {
                         println!("unknown code {} (hex {})", x, hex::encode(&[x;1]));
                     }
                     
-                }
+                },
             };
             let mut remainder = vec![];
             let p = payload.read_to_end(&mut remainder).unwrap();

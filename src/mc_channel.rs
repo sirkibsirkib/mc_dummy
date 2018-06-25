@@ -1,5 +1,5 @@
 
-use std::net::TcpStream;
+// use std::net::TcpStream;	
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian, LittleEndian};
 use std::io::{Read, Write};
 use std::io;
@@ -35,9 +35,9 @@ pub enum HandshakeState {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-enum Preamble {
+pub enum Preamble {
 	Handshake, LoginStart, PlayerPosition, ClientSettings, TeleportConfirm,
-	PluginMessage,
+	PluginMessage, PlayerPositionLook,
 }
 
 pub struct Packet {
@@ -85,15 +85,28 @@ impl Packet {
 		packet
 	}
 
+	pub fn new_player_position_look(x:f64, feet_y:f64, z:f64, yaw:f32, pitch:f32, on_ground:bool) -> Self {
+		let mut packet = Self::new_raw();
+		packet.write_preamble(Preamble::PlayerPositionLook);
+		packet.write_doubz(x);
+		packet.write_doubz(feet_y);
+		packet.write_doubz(z);
+		packet.write_floatz(yaw);
+		packet.write_floatz(pitch);
+		packet.write_boolz(on_ground);
+		packet
+
+	}
+
 	pub fn new_client_settings(locale:&str, view_distance:i8, chat_mode:ChatMode, chat_colors:bool, skin_flags:u8, main_hand:MainHand) -> Self {
 		//WORKS
 		let mut packet = Self::new_raw();
 		packet.write_preamble(Preamble::ClientSettings);
 		packet.write_string(locale);
-		packet.write_i8(view_distance);
+		packet.write_i8(view_distance).unwrap();
 		packet.write_chat_mode(chat_mode);
 		packet.write_boolz(chat_colors);
-		packet.write_u8(skin_flags);
+		packet.write_u8(skin_flags).unwrap();
 		packet.write_main_hand(main_hand);
 		packet
 	}
@@ -111,7 +124,7 @@ impl Packet {
 		let mut packet = Self::new_raw();
 		packet.write_preamble(Preamble::PluginMessage);
 		packet.write_string(plugin_str);
-		packet.write(data);
+		packet.write(data).unwrap();
 		packet
 	}
 
@@ -127,7 +140,7 @@ impl Packet {
 				w.write_varint(len as i32);
 			}
 		}
-		w.write(&self.bytes[..]);
+		w.write(&self.bytes[..]).unwrap();
 	}
 
 	fn new_raw() -> Self {
@@ -161,12 +174,12 @@ pub trait WritePlusPlus: Write {
             i = i + 1;
         }
         buf[i] = x as u8;
-        self.write(&buf[..i+1]);
+        self.write(&buf[..i+1]).unwrap();
 	}
 
 	fn write_string(&mut self, s: &str) {
         self.write_varint(s.len() as i32);
-        self.write(s.as_bytes());
+        self.write(s.as_bytes()).unwrap();
     }
 
     fn write_unsigned_short(&mut self, x: u16) {
@@ -190,8 +203,9 @@ pub trait WritePlusPlus: Write {
 			Preamble::ClientSettings => 0x04,
 			Preamble::TeleportConfirm => 0x00,
 			Preamble::PluginMessage => 0x09,
+			Preamble::PlayerPositionLook => 0x0E,
 		};
-		self.write(& [byte; 1]);
+		self.write(& [byte; 1]).unwrap();
     }
 
     fn write_position(&mut self, position: &Position) {
@@ -199,19 +213,23 @@ pub trait WritePlusPlus: Write {
     		((position.x & 0x3FFFFFF) << 38)
     		| ((position.y & 0xFFF) << 26)
     		| (position.z & 0x3FFFFFF);
-    	self.write_u64::<LittleEndian>(unsafe {  mem::transmute(val)  });
+    	self.write_u64::<LittleEndian>(unsafe {  mem::transmute(val)  }).unwrap();
     }
 
     fn write_doubz(&mut self, x:f64) {
     	self.write_f64::<BigEndian>(x);
     }
 
+    fn write_floatz(&mut self, x:f32) {
+    	self.write_f32::<BigEndian>(x);
+    }
+
     fn write_boolz(&mut self, x:bool) {
     	if x {
-    		self.write_u8(0x01);
+    		self.write_u8(0x01)
     	} else {
-    		self.write_u8(0x00);
-    	}
+    		self.write_u8(0x00)
+    	}.unwrap();
     }
 
     fn write_chat_mode(&mut self, mode: ChatMode) {
@@ -258,9 +276,21 @@ pub trait ReadPlusPlus: Read {
 		let z = val << 38 >> 38;
 		Position {
 			x: (if x >= 2^25 { x as i64 - 2^26 } else {x as i64}),
-			y: (if y >= 2^25 { y as i64 - 2^12 } else {y as i64}),
+			y: (if y >= 2^11 { y as i64 - 2^12 } else {y as i64}),
 			z: (if z >= 2^25 { z as i64 - 2^26 } else {z as i64}),
 		}
+    }
+
+    fn read_doubz(&mut self) -> f64 {
+    	self.read_f64::<BigEndian>().unwrap()
+    }
+
+    fn read_floatz(&mut self) -> f32 {
+    	self.read_f32::<BigEndian>().unwrap()
+    }
+
+    fn read_bytez(&mut self) -> i8 {
+    	self.read_i8().unwrap()
     }
 }
 impl<T: Read> ReadPlusPlus for T {}
